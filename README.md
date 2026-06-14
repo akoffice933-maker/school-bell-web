@@ -14,6 +14,12 @@
 
 ---
 
+<p align="center">
+  <img src="./docs/readme-screenshot.png" alt="Школьный звонок Pro · скриншот интерфейса" />
+</p>
+
+---
+
 ## 📖 О проекте
 
 **Школьный звонок Pro (Web Edition)** — современная веб-реализация системы автоматического школьного звонка, выполненная по техническому заданию [`SchoolBell_TZ_Tender_Sochi_2026.md`](./SchoolBell_TZ_Tender_Sochi_2026.md).
