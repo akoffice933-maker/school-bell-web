@@ -234,8 +234,8 @@ export function SettingsPage() {
             onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', settings: { activeShift: e.target.value } })}
             style={{ width: 'auto' }}
           >
-            <option>Первая смена</option>
-            <option>Вторая смена</option>
+            <option value="Первая смена">Первая смена</option>
+            <option value="Вторая смена">Вторая смена</option>
           </select>
         </div>
       </div>

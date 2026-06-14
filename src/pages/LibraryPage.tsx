@@ -10,7 +10,7 @@ import { loadAudioBlob } from '../lib/storage';
 import type { AudioFile } from '../lib/types';
 
 export function LibraryPage() {
-  const { state, uploadAudio, deleteAudio, addLog } = useApp();
+  const { state, uploadAudio, deleteAudio, addLog, dispatch } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'Uploaded' | 'RecordedFromMic' | 'BuiltIn'>('all');
@@ -55,8 +55,7 @@ export function LibraryPage() {
   };
 
   const handleUpdate = (file: AudioFile, patch: Partial<AudioFile>) => {
-    // вызываем напрямую через dispatch
-    useApp().dispatch({ type: 'UPDATE_AUDIO', file: { ...file, ...patch } });
+    dispatch({ type: 'UPDATE_AUDIO', file: { ...file, ...patch } });
   };
 
   const handleDownload = async (file: AudioFile) => {

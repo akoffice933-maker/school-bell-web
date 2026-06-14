@@ -44,7 +44,7 @@ function parseCsvLine(line: string): string[] {
 
 export function exportScheduleToCSV(schedule: ScheduleEntry[], bellTypes: BellType[]): string {
   const typeById = new Map(bellTypes.map((b) => [b.id, b]));
-  const header = ['День', 'Время', 'Тип', 'Смена', 'Повтор', 'Действует с', 'Действует по', 'ID аудио'];
+  const header = ['День', 'Время от', 'Время до', 'Тип', 'Смена', 'Повтор', 'Действует с', 'Действует по', 'ID аудио'];
   const lines: string[] = [header.map(escapeCsvField).join(',')];
   const dayNames = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
   for (const s of schedule) {
@@ -52,6 +52,7 @@ export function exportScheduleToCSV(schedule: ScheduleEntry[], bellTypes: BellTy
     const row = [
       dayNames[s.dayOfWeek] ?? String(s.dayOfWeek),
       s.time,
+      s.endTime ?? '',
       bt ? bt.name : `#${s.bellTypeId}`,
       s.shift,
       s.isRecurring ? 'да' : 'нет',
@@ -94,7 +95,15 @@ export function importScheduleFromCSV(
       errors.push(`Строка ${i + 2}: меньше 3 колонок`);
       continue;
     }
-    const [dayStr, timeStr, typeStr, shiftStr, repeatStr, fromStr, toStr, audioIdStr] = cells;
+    const [dayStr, timeStr] = cells;
+    const newFormat = cells.length >= 9;
+    const endTimeStr = newFormat ? cells[2] : '';
+    const typeStr = newFormat ? cells[3] : cells[2];
+    const shiftStr = newFormat ? cells[4] : cells[3];
+    const repeatStr = newFormat ? cells[5] : cells[4];
+    const fromStr = newFormat ? cells[6] : cells[5];
+    const toStr = newFormat ? cells[7] : cells[6];
+    const audioIdStr = newFormat ? cells[8] : cells[7];
     const dayKey = (dayStr || '').toLowerCase();
     const dayOfWeek = DAY_MAP_RU[dayKey];
     if (dayOfWeek === undefined) {
@@ -109,6 +118,10 @@ export function importScheduleFromCSV(
     }
     if (!/^\d{1,2}:\d{2}$/.test(timeStr || '')) {
       errors.push(`Строка ${i + 2}: некорректное время "${timeStr}"`);
+      continue;
+    }
+    if (endTimeStr && !/^\d{1,2}:\d{2}$/.test(endTimeStr)) {
+      errors.push(`Строка ${i + 2}: некорректное время окончания "${endTimeStr}"`);
       continue;
     }
     let bellTypeId = typeByName.get((typeStr || '').toLowerCase());
@@ -130,6 +143,7 @@ export function importScheduleFromCSV(
       id: currentId++,
       dayOfWeek: dayFinal,
       time: timeStr,
+      endTime: endTimeStr || null,
       bellTypeId,
       audioFileId,
       shift,

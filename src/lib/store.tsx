@@ -7,10 +7,9 @@ import { createContext, useContext, useEffect, useReducer, useRef, type ReactNod
 import type {
   AppState, AudioFile, ScheduleEntry, Holiday, LogEntry, MicRecording, Settings, BellType,
 } from './types';
-import { loadState, saveState, createInitialState, sha256, migratePasswordHash } from './storage';
+import { loadState, saveState, createInitialState } from './storage';
 import {
-  ensureBuiltInAudio, playAudioFile, stopAudio, stopTTS, stopAny,
-  playAnyFile, ingestUploadedFile, ingestRecordedBlob, validateAudioFile,
+  ensureBuiltInAudio, stopAny, playAnyFile, ingestUploadedFile, ingestRecordedBlob, validateAudioFile,
 } from './audio';
 import { scheduler } from './scheduler';
 import { deleteAudioBlob } from './storage';
@@ -57,8 +56,11 @@ function reducer(state: AppState, action: Action): AppState {
       recomputeInUse(updated);
       return updated;
     }
-    case 'ADD_SCHEDULE':
-      return { ...state, schedule: [...state.schedule, action.entry] };
+    case 'ADD_SCHEDULE': {
+      const updated = { ...state, schedule: [...state.schedule, action.entry] };
+      recomputeInUse(updated);
+      return updated;
+    }
     case 'UPDATE_SCHEDULE': {
       const updated = {
         ...state,
@@ -110,7 +112,7 @@ interface AppContextValue {
   addLog: (message: string, opts?: { type?: LogEntry['type']; scheduleId?: number | null; audioFileName?: string }) => void;
   uploadAudio: (file: File, transcript?: string) => Promise<AudioFile | null>;
   addRecording: (blob: Blob, transcript: string, wasLive: boolean) => Promise<AudioFile | null>;
-  playFile: (file: AudioFile) => Promise<void>;
+  playFile: (file: AudioFile, onEnded?: () => void) => Promise<void>;
   stopPlayback: () => void;
   rebuildSchedule: () => void;
   deleteAudio: (id: number) => Promise<void>;
@@ -178,7 +180,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         dispatch({ type: 'ADD_LOG', log });
         showNotification(log.message);
         // Поддержка TTS (kind === 'tts') и обычного аудио
-        playAnyFile(audio);
+        void playAnyFile(audio).catch((e: any) => {
+          addLog(`❌ Не удалось запустить звук: ${e?.message ?? e}`, { type: 'system', scheduleId: entry.id, audioFileName: audio.fileName });
+        });
       },
       () => {},
     );
@@ -245,10 +249,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const playFile: AppContextValue['playFile'] = async (file) => {
+  const playFile: AppContextValue['playFile'] = async (file, onEnded) => {
     const label = file.kind === 'tts' ? `🔈 TTS: «${file.ttsText.slice(0, 30)}${file.ttsText.length > 30 ? '…' : ''}»` : file.originalFileName;
     addLog(`▶️ Воспроизведение: ${label}`, { type: 'manual', audioFileName: file.fileName });
-    await playAnyFile(file);
+    await playAnyFile(file, onEnded);
   };
 
   const stopPlayback: AppContextValue['stopPlayback'] = () => {

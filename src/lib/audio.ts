@@ -16,6 +16,13 @@ function getAudioContext(): AudioContext {
   return audioContext;
 }
 
+export async function ensureAudioContextReady(): Promise<void> {
+  const ctx = getAudioContext();
+  if (ctx.state === 'suspended') {
+    await ctx.resume();
+  }
+}
+
 // ---------- Синтез встроенных звонков (заменяет MP3) ----------
 
 function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
@@ -116,8 +123,8 @@ let currentGain: GainNode | null = null;
 export async function playAudioFile(file: AudioFile, onEnded?: () => void): Promise<void> {
   if (!file.blobKey) return;
   stopAudio();
+  await ensureAudioContextReady();
   const ctx = getAudioContext();
-  if (ctx.state === 'suspended') await ctx.resume();
   const buffer = await getAudioBuffer(file.blobKey);
   if (!buffer) return;
   const source = ctx.createBufferSource();
@@ -382,7 +389,7 @@ export interface TTSSession {
 }
 
 /** Произнести текст (TTS) */
-export async function speakText(text: string, opts?: { volume?: number; rate?: number; pitch?: number; voiceName?: string }): Promise<TTSSession> {
+export async function speakText(text: string, opts?: { volume?: number; rate?: number; pitch?: number; voiceName?: string }, onEnded?: () => void): Promise<TTSSession> {
   if (typeof speechSynthesis === 'undefined') {
     throw new Error('Web Speech API не поддерживается в этом браузере');
   }
@@ -405,10 +412,12 @@ export async function speakText(text: string, opts?: { volume?: number; rate?: n
   const promise = new Promise<void>((resolve) => {
     u.onend = () => {
       if (currentUtterance === u) currentUtterance = null;
+      onEnded?.();
       resolve();
     };
     u.onerror = () => {
       if (currentUtterance === u) currentUtterance = null;
+      onEnded?.();
       resolve();
     };
   });
@@ -428,12 +437,12 @@ export function isTTSSpeaking(): boolean {
 }
 
 /** Воспроизвести AudioFile — для TTS вызывает speakText, для аудио — playAudioFile */
-export async function playAnyFile(file: AudioFile): Promise<void> {
+export async function playAnyFile(file: AudioFile, onEnded?: () => void): Promise<void> {
   if (file.kind === 'tts') {
     if (!file.ttsText.trim()) return;
-    await speakText(file.ttsText, { volume: file.volume });
+    await speakText(file.ttsText, { volume: file.volume }, onEnded);
   } else {
-    await playAudioFile(file);
+    await playAudioFile(file, onEnded);
   }
 }
 
@@ -489,7 +498,7 @@ export function createLevelMeter(stream: MediaStream): LevelMeter {
 /** Проиграть короткий тестовый сигнал (используется в настройках) */
 export async function playTestSound(): Promise<void> {
   const ctx = getAudioContext();
-  if (ctx.state === 'suspended') await ctx.resume();
+  await ensureAudioContextReady();
   stopAny();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();

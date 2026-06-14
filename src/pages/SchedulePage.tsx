@@ -2,7 +2,7 @@
 // Страница «Расписание»: редактор еженедельных звонков, праздники, смены
 // =====================================================
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../lib/store';
 import type { ScheduleEntry, Holiday, AudioFile } from '../lib/types';
 import { Icon } from '../components/Icons';
@@ -23,6 +23,33 @@ export function SchedulePage() {
   const [search, setSearch] = useState('');
   const csvInputRef = useRef<HTMLInputElement>(null);
 
+  // Если пришли с Dashboard после записи — открыть форму с предзаполненным аудио
+  useEffect(() => {
+    let pendingId: number | null = null;
+    try {
+      const v = sessionStorage.getItem('pendingScheduleAudioId');
+      if (v) {
+        pendingId = Number(v);
+        sessionStorage.removeItem('pendingScheduleAudioId');
+      }
+    } catch {}
+    if (pendingId && state.audioFiles.some((a: AudioFile) => a.id === pendingId)) {
+      const startTime = localTimePlusMinutes(new Date(), 60);
+      setEditing({
+        id: 0,
+        dayOfWeek: new Date().getDay(),
+        time: startTime,
+        endTime: addMinutes(startTime, 45),
+        bellTypeId: state.bellTypes[0]?.id ?? 1,
+        audioFileId: pendingId,
+        shift: state.settings.activeShift,
+        isRecurring: true,
+        validFrom: new Date().toISOString().slice(0, 10),
+        validTo: null,
+      });
+    }
+  }, [state.audioFiles, state.bellTypes, state.settings.activeShift]);
+
   // Перепланировать при изменении
   useMemo(() => {
     (window as any).__scheduleUpdate = Date.now();
@@ -35,7 +62,7 @@ export function SchedulePage() {
       : list.filter((s: ScheduleEntry) => {
           const bt = state.bellTypes.find((b) => b.id === s.bellTypeId);
           const audio = state.audioFiles.find((a: AudioFile) => a.id === s.audioFileId);
-          const haystack = `${s.time} ${s.shift} ${bt?.name ?? ''} ${audio?.originalFileName ?? ''}`.toLowerCase();
+          const haystack = `${s.time} ${s.endTime ?? ''} ${s.shift} ${bt?.name ?? ''} ${audio?.originalFileName ?? ''}`.toLowerCase();
           return haystack.includes(search.toLowerCase());
         });
     return filtered.sort((a: ScheduleEntry, b: ScheduleEntry) => a.time.localeCompare(b.time) || a.shift.localeCompare(b.shift));
@@ -62,10 +89,12 @@ export function SchedulePage() {
   };
 
   const handleNew = () => {
+    const startTime = '09:00';
     setEditing({
       id: 0,
       dayOfWeek: activeDay,
-      time: '09:00',
+      time: startTime,
+      endTime: addMinutes(startTime, 45),
       bellTypeId: state.bellTypes[0]?.id ?? 1,
       audioFileId: state.audioFiles[0]?.id ?? 1,
       shift: state.settings.activeShift,
@@ -76,6 +105,10 @@ export function SchedulePage() {
   };
 
   const handleSave = (entry: ScheduleEntry) => {
+    if (!entry.time?.trim()) {
+      alert('Укажите время звонка.');
+      return;
+    }
     if (entry.id === 0) {
       const newEntry = { ...entry, id: genIds.schedule() };
       dispatch({ type: 'ADD_SCHEDULE', entry: newEntry });
@@ -228,7 +261,10 @@ export function SchedulePage() {
                       return (
                         <tr key={entry.id} className="border-t hover:bg-[var(--bg-soft)]" style={{ borderColor: 'var(--border)' }}>
                           <Td>
-                            <span className="font-mono font-semibold">{entry.time}</span>
+                            <div className="font-mono font-semibold">
+                              {entry.time}
+                              {entry.endTime ? <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}> - {entry.endTime}</span> : null}
+                            </div>
                           </Td>
                           <Td><span className="chip">{entry.shift}</span></Td>
                           <Td>
@@ -319,7 +355,10 @@ function Td({ children, className = '', style }: { children?: React.ReactNode; c
 
 function ScheduleEntryModal({ entry, onClose, onSave }: { entry: ScheduleEntry; onClose: () => void; onSave: (e: ScheduleEntry) => void }) {
   const { state } = useApp();
-  const [form, setForm] = useState<ScheduleEntry>(entry);
+  const [form, setForm] = useState<ScheduleEntry>({
+    ...entry,
+    endTime: entry.endTime ?? null,
+  });
 
   return (
     <Modal title={entry.id === 0 ? '➕ Новое событие' : '✏️ Изменить событие'} onClose={onClose}>
@@ -329,8 +368,15 @@ function ScheduleEntryModal({ entry, onClose, onSave }: { entry: ScheduleEntry; 
             {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}</option>)}
           </select>
         </Field>
-        <Field label="Время">
-          <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} />
+        <Field label="Время от">
+          <input type="time" required value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} />
+        </Field>
+        <Field label="Время до">
+          <input
+            type="time"
+            value={form.endTime ?? ''}
+            onChange={(e) => setForm({ ...form, endTime: e.target.value || null })}
+          />
         </Field>
         <Field label="Смена">
           <select value={form.shift} onChange={(e) => setForm({ ...form, shift: e.target.value })}>
@@ -381,7 +427,16 @@ function ScheduleEntryModal({ entry, onClose, onSave }: { entry: ScheduleEntry; 
       </div>
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className="btn btn-secondary">Отмена</button>
-        <button onClick={() => onSave(form)} className="btn btn-primary">
+        <button
+          onClick={() => {
+            if (form.endTime && form.endTime <= form.time) {
+              alert('Время окончания должно быть позже времени начала.');
+              return;
+            }
+            onSave(form);
+          }}
+          className="btn btn-primary"
+        >
           <Icon.Save width={14} height={14} /> Сохранить
         </button>
       </div>
@@ -519,4 +574,18 @@ function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function addMinutes(time: string, minutes: number): string {
+  const [h, m] = time.split(':').map(Number);
+  const total = (h * 60) + m + minutes;
+  const hh = Math.floor((total % (24 * 60)) / 60);
+  const mm = total % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function localTimePlusMinutes(date: Date, minutes: number): string {
+  const next = new Date(date);
+  next.setMinutes(next.getMinutes() + minutes);
+  return `${String(next.getHours()).padStart(2, '0')}:${String(next.getMinutes()).padStart(2, '0')}`;
 }

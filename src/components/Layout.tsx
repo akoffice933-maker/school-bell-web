@@ -2,11 +2,12 @@
 // Layout: боковая навигация, верхняя панель, основная область
 // =====================================================
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useApp } from '../lib/store';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import { Icon } from './Icons';
+import { ensureAudioContextReady, isPlaying, isTTSSpeaking } from '../lib/audio';
 
 export type PageId = 'dashboard' | 'schedule' | 'library' | 'recorder' | 'broadcast' | 'logs' | 'settings';
 
@@ -33,10 +34,23 @@ export function Layout({
   onNavigate: (p: PageId) => void;
   children: ReactNode;
 }) {
-  const { state, dispatch } = useApp();
+  const { state, dispatch, stopPlayback } = useApp();
   const pwa = usePwaInstall();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [iosDismissed, setIosDismissed] = useState(false);
+  const audioActive = useAudioActive();
+
+  useEffect(() => {
+    const unlock = () => {
+      void ensureAudioContextReady().catch(() => {});
+    };
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
 
   return (
     <div className="flex h-full" style={{ background: 'var(--bg)' }}>
@@ -142,6 +156,16 @@ export function Layout({
               Установлено
             </span>
           )}
+          {audioActive && (
+            <button
+              onClick={stopPlayback}
+              className="chip chip-danger cursor-pointer hidden sm:inline-flex"
+              title="Остановить текущее аудио"
+            >
+              <Icon.Stop width={12} height={12} />
+              Стоп аудио
+            </button>
+          )}
           <ServiceStatusBadge />
         </header>
 
@@ -193,4 +217,17 @@ function ServiceStatusBadge() {
       {active ? 'Служба запущена' : 'Служба остановлена'}
     </button>
   );
+}
+
+function useAudioActive() {
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setActive(isPlaying() || isTTSSpeaking());
+    sync();
+    const id = window.setInterval(sync, 200);
+    return () => clearInterval(id);
+  }, []);
+
+  return active;
 }

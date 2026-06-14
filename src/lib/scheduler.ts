@@ -86,7 +86,7 @@ class SchoolBellScheduler {
   private scheduleDay(date: Date) {
     if (!this.appState) return;
     const day = date.getDay();
-    const dateStr = date.toISOString().slice(0, 10);
+    const dateStr = localDateKey(date);
 
     // Проверка праздника
     const holiday = this.appState.holidays.find((h) => h.date === dateStr);
@@ -108,19 +108,20 @@ class SchoolBellScheduler {
       const ms = fireDate.getTime() - Date.now();
       if (ms < -1000) continue; // уже прошло
       const fireIn = Math.max(0, ms);
-      const timerId = window.setTimeout(() => this.fire(entry, dateStr), fireIn);
-      this.timers.push({ entry, fireAt: Date.now() + fireIn, timerId, dayKey: dateStr });
+      const scheduledTime = fireDate.getTime();
+      const timerId = window.setTimeout(() => this.fire(entry, dateStr, scheduledTime), fireIn);
+      this.timers.push({ entry, fireAt: scheduledTime, timerId, dayKey: dateStr });
     }
   }
 
-  private fire(entry: ScheduleEntry, dayKey: string) {
+  private fire(entry: ScheduleEntry, dayKey: string, scheduledTime: number) {
     if (!this.appState || !this.fireHandler || !this.logHandler) return;
     const audio = this.appState.audioFiles.find((a) => a.id === entry.audioFileId);
     if (!audio) return;
     const now = new Date();
     if (this.dayKey(now) !== dayKey) return; // день сменился
-    const [h, m] = entry.time.split(':').map(Number);
-    if (now.getHours() !== h || now.getMinutes() !== m) return; // минута другая
+    const diff = Math.abs(now.getTime() - scheduledTime);
+    if (diff > 90_000) return; // отлёжалось более 1.5 минуты
     this.fireHandler(entry, audio);
   }
 
@@ -132,7 +133,7 @@ class SchoolBellScheduler {
   }
 
   /** Получить ближайшие N событий */
-  getUpcoming(limit = 5): { entry: ScheduleEntry; audio: AudioFile; when: Date }[] {
+  getUpcoming(limit = 5, shiftFilter?: string): { entry: ScheduleEntry; audio: AudioFile; when: Date }[] {
     if (!this.appState) return [];
     const now = new Date();
     const result: { entry: ScheduleEntry; audio: AudioFile; when: Date }[] = [];
@@ -141,13 +142,19 @@ class SchoolBellScheduler {
       date.setDate(now.getDate() + d);
       date.setHours(0, 0, 0, 0);
       const day = date.getDay();
-      const dateStr = date.toISOString().slice(0, 10);
+      const dateStr = localDateKey(date);
       const holiday = this.appState.holidays.find((h) => h.date === dateStr);
       if (holiday?.isBellDisabled) continue;
       const todays = this.appState.schedule.filter(
-        (s) => s.dayOfWeek === day && s.shift === this.appState!.settings.activeShift,
+        (s) => s.dayOfWeek === day && (!shiftFilter || s.shift === shiftFilter),
       );
       for (const entry of todays) {
+        const validFrom = new Date(entry.validFrom);
+        if (date < new Date(validFrom.getFullYear(), validFrom.getMonth(), validFrom.getDate())) continue;
+        if (entry.validTo) {
+          const validTo = new Date(entry.validTo);
+          if (date > new Date(validTo.getFullYear(), validTo.getMonth(), validTo.getDate())) continue;
+        }
         const [h, m] = entry.time.split(':').map(Number);
         const when = new Date(date);
         when.setHours(h, m, 0, 0);
@@ -162,8 +169,15 @@ class SchoolBellScheduler {
   }
 
   private dayKey(d: Date) {
-    return d.toISOString().slice(0, 10);
+    return localDateKey(d);
   }
 }
 
 export const scheduler = new SchoolBellScheduler();
+
+function localDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}

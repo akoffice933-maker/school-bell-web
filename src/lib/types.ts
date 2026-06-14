@@ -40,6 +40,7 @@ export interface ScheduleEntry {
   id: number;
   dayOfWeek: number;           // 0=Вс, 1=Пн ... 6=Сб
   time: string;                // "HH:MM"
+  endTime?: string | null;     // "HH:MM" (опционально)
   bellTypeId: number;
   audioFileId: number;
   shift: string;               // "Первая смена" / "Вторая смена"

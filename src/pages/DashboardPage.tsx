@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../lib/store';
 import { scheduler } from '../lib/scheduler';
 import { Icon } from '../components/Icons';
-import { startMicRecording } from '../lib/audio';
+import { isPlaying, startMicRecording } from '../lib/audio';
 
 const SHORT_DAYS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
@@ -25,10 +25,18 @@ function formatCountdown(ms: number): string {
   return `${s}с`;
 }
 
+function localDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) {
-  const { state, addLog, playFile, addRecording } = useApp();
+  const { state, addLog, playFile, stopPlayback, addRecording } = useApp();
   const [now, setNow] = useState(new Date());
   const [quickPickerOpen, setQuickPickerOpen] = useState(false);
+  const [playingAudioId, setPlayingAudioId] = useState<number | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
@@ -41,10 +49,15 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) 
     scheduler.rebuild();
   }, [state.schedule, state.settings.activeShift, state.settings.serviceEnabled, state.holidays]);
 
-  const upcoming = useMemo(() => {
+  // Ближайшие звонки: пересчитываем каждую секунду (точное обновление обратного отсчёта)
+  // и при любом изменении state (новый звонок, смена, праздник)
+  const [upcoming, otherShiftUpcoming] = useMemo(() => {
     scheduler.setState(state);
-    return scheduler.getUpcoming(5);
-  }, [state, now.getMinutes()]);
+    const all = scheduler.getUpcoming(10);
+    const active = all.filter((item) => item.entry.shift === state.settings.activeShift).slice(0, 5);
+    const other = all.filter((item) => item.entry.shift !== state.settings.activeShift).slice(0, 5);
+    return [active, other] as const;
+  }, [state, now]);
 
   const today = now.getDay();
   const todaySchedule = useMemo(
@@ -77,11 +90,15 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) 
       const ok = window.confirm('🎙️ Запись идёт...\n\nГоворите в микрофон.\n\nНажмите ОК чтобы остановить и воспроизвести.');
       const blob = await session.stop();
       if (ok) {
-        // Сохранить в библиотеку
         const saved = await addRecording(blob, 'Срочное объявление', true);
         if (saved) {
-          // Мгновенное воспроизведение
           await playFile(saved);
+          // Предлагаем сразу создать звонок в расписании
+          if (window.confirm('🎉 Запись сохранена!\n\nСоздать звонок с этим аудио в расписании сейчас?')) {
+            onNavigate('schedule');
+            // Передадим выбранное аудио через sessionStorage
+            try { sessionStorage.setItem('pendingScheduleAudioId', String(saved.id)); } catch {}
+          }
         }
       }
     } catch (e: any) {
@@ -105,7 +122,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) 
             </div>
             <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
               Активная смена: <span className="font-medium" style={{ color: 'var(--text)' }}>{state.settings.activeShift}</span>
-              {state.holidays.find((h) => h.date === now.toISOString().slice(0, 10))?.isBellDisabled && (
+              {state.holidays.find((h) => h.date === localDateKey(now))?.isBellDisabled && (
                 <span className="chip chip-warning ml-2">⚠️ Праздник — звонки отключены</span>
               )}
             </div>
@@ -150,56 +167,107 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) 
               Расписание <Icon.ChevronRight width={14} height={14} />
             </button>
           </div>
-          {upcoming.length === 0 ? (
+          {upcoming.length === 0 && otherShiftUpcoming.length === 0 ? (
             <div className="text-center py-10" style={{ color: 'var(--text-muted)' }}>
               <Icon.Clock width={36} height={36} className="mx-auto opacity-40" />
               <div className="mt-2">Нет запланированных звонков</div>
+              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Создайте расписание — звонки появятся здесь автоматически
+              </div>
               <button onClick={() => onNavigate('schedule')} className="btn btn-primary mt-3">
-                <Icon.Plus /> Добавить
+                <Icon.Plus /> Добавить звонок
               </button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {upcoming.map(({ entry, audio, when }, i) => {
-                const bt = state.bellTypes.find((b) => b.id === entry.bellTypeId);
-                const ms = when.getTime() - now.getTime();
-                const isNext = i === 0;
-                return (
-                  <div
-                    key={entry.id}
-                    className={`p-3 rounded-lg flex items-center gap-3 ${isNext ? 'pulse-ring' : ''}`}
-                    style={{ background: isNext ? 'var(--accent-soft)' : 'var(--bg-soft)' }}
-                  >
-                    <div
-                      className="h-10 w-10 rounded-lg grid place-items-center text-xl"
-                      style={{ background: bt?.color + '22', color: bt?.color }}
-                    >
-                      {bt?.emoji}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{bt?.name}</div>
-                      <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-                        {audio.originalFileName} · {SHORT_DAYS[when.getDay()]} {formatTime(when)}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono font-semibold" style={{ color: 'var(--accent)' }}>
-                        {entry.time}
-                      </div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        через {formatCountdown(ms)}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleRingNow(entry)}
-                      className="btn btn-secondary p-2"
-                      title="Позвонить сейчас"
-                    >
-                      <Icon.Play width={14} height={14} />
-                    </button>
+            <div className="space-y-3">
+              {upcoming.length === 0 ? (
+                <div className="text-center py-6" style={{ color: 'var(--text-muted)' }}>
+                  <Icon.Clock width={32} height={32} className="mx-auto opacity-40" />
+                  <div className="mt-2">Нет звонков для активной смены</div>
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                    Выберите нужную смену в настройках или создайте новое событие
                   </div>
-                );
-              })}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {upcoming.map(({ entry, audio, when }, i) => {
+                    const bt = state.bellTypes.find((b) => b.id === entry.bellTypeId);
+                    const ms = when.getTime() - now.getTime();
+                    const isNext = i === 0;
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`p-3 rounded-lg flex items-center gap-3 ${isNext ? 'pulse-ring' : ''}`}
+                        style={{ background: isNext ? 'var(--accent-soft)' : 'var(--bg-soft)' }}
+                      >
+                        <div
+                          className="h-10 w-10 rounded-lg grid place-items-center text-xl"
+                          style={{ background: bt?.color + '22', color: bt?.color }}
+                        >
+                          {bt?.emoji}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium">{bt?.name}</div>
+                          <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                            {audio.originalFileName} · {SHORT_DAYS[when.getDay()]} {formatTime(when)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-mono font-semibold" style={{ color: 'var(--accent)' }}>
+                            {entry.time}
+                          </div>
+                          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            через {formatCountdown(ms)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRingNow(entry)}
+                          className="btn btn-secondary p-2"
+                          title="Позвонить сейчас"
+                        >
+                          <Icon.Play width={14} height={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {otherShiftUpcoming.length > 0 && (
+                <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
+                  <div className="text-sm font-semibold mb-2">Звонки для других смен</div>
+                  <div className="space-y-2">
+                    {otherShiftUpcoming.map(({ entry, audio, when }) => {
+                      const bt = state.bellTypes.find((b) => b.id === entry.bellTypeId);
+                      const ms = when.getTime() - now.getTime();
+                      return (
+                        <div key={entry.id} className="p-3 rounded-lg bg-[var(--bg-soft)] flex items-center gap-3">
+                          <div
+                            className="h-10 w-10 rounded-lg grid place-items-center text-xl"
+                            style={{ background: bt?.color + '22', color: bt?.color }}
+                          >
+                            {bt?.emoji}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium">{bt?.name}</div>
+                            <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                              {audio.originalFileName} · {SHORT_DAYS[when.getDay()]} {formatTime(when)} · {entry.shift}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-mono font-semibold" style={{ color: 'var(--accent)' }}>
+                              {entry.time}
+                            </div>
+                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              через {formatCountdown(ms)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -212,6 +280,9 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) 
           {todaySchedule.length === 0 ? (
             <div className="text-center py-8" style={{ color: 'var(--text-muted)' }}>
               <div>Звонков нет</div>
+              <button onClick={() => onNavigate('schedule')} className="btn btn-secondary mt-2 text-xs">
+                <Icon.Plus width={12} height={12} /> Создать
+              </button>
             </div>
           ) : (
             <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
@@ -278,24 +349,30 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: any) => void }) 
               Выберите событие из расписания — оно будет воспроизведено немедленно.
             </p>
             <div className="space-y-1">
-              {todaySchedule.map((entry) => {
-                const bt = state.bellTypes.find((b) => b.id === entry.bellTypeId);
-                const audio = state.audioFiles.find((a) => a.id === entry.audioFileId);
-                return (
-                  <button
-                    key={entry.id}
-                    onClick={() => handleRingNow(entry)}
-                    className="w-full flex items-center gap-3 p-2.5 rounded-lg text-left hover:bg-[var(--bg-soft)]"
-                  >
-                    <span className="text-xl">{bt?.emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm">{bt?.name}</div>
-                      <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{audio?.originalFileName}</div>
-                    </div>
-                    <span className="font-mono text-sm">{entry.time}</span>
-                  </button>
-                );
-              })}
+              {todaySchedule.length === 0 ? (
+                <div className="text-center py-6 text-sm" style={{ color: 'var(--text-muted)' }}>
+                  На сегодня звонков нет. Создайте их в Расписании.
+                </div>
+              ) : (
+                todaySchedule.map((entry) => {
+                  const bt = state.bellTypes.find((b) => b.id === entry.bellTypeId);
+                  const audio = state.audioFiles.find((a) => a.id === entry.audioFileId);
+                  return (
+                    <button
+                      key={entry.id}
+                      onClick={() => handleRingNow(entry)}
+                      className="w-full flex items-center gap-3 p-2.5 rounded-lg text-left hover:bg-[var(--bg-soft)]"
+                    >
+                      <span className="text-xl">{bt?.emoji}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm">{bt?.name}</div>
+                        <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{audio?.originalFileName}</div>
+                      </div>
+                      <span className="font-mono text-sm">{entry.time}</span>
+                    </button>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -321,7 +398,7 @@ function StatCard({ label, value, icon, color }: { label: string; value: number;
   );
 }
 
-function LogTypeChip({ type }: { type: string }) {
+function LogTypeChip(props: { type: string }) {
   const map: Record<string, { label: string; cls: string }> = {
     bell: { label: '🔔', cls: 'chip-accent' },
     voice: { label: '🎙', cls: 'chip-warning' },
@@ -329,8 +406,6 @@ function LogTypeChip({ type }: { type: string }) {
     manual: { label: '▶', cls: 'chip-success' },
     system: { label: '⚙', cls: '' },
   };
-  const m = map[type] ?? map.system;
+  const m = map[props.type] ?? map.system;
   return <span className={`chip ${m.cls}`} style={{ minWidth: 26, justifyContent: 'center' }}>{m.label}</span>;
 }
-
-
